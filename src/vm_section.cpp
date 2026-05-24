@@ -1,9 +1,14 @@
 #include "vm_section.h"
 
+#include <algorithm>
+
 void VMSection::initialise(DWORD virtualAddress, DWORD pointerToRawData)
 {
 	this->virtualAddress = virtualAddress;
 	this->pointerToRawData = pointerToRawData;
+	this->writePointer = 0;
+	this->bytes.clear();
+	VM::vmHandlers.clear();
 	addVmHandlers();
 	initialised = true;
 }
@@ -22,15 +27,18 @@ void VMSection::addVmTramp(DWORD bytecodeRva)
 {
 	addBytes({ 0x68 }); addBytes(convertToByteVector<DWORD>(bytecodeRva)); // push bytecodeRva
 
-	DWORD relToEnterHandler = VM::getVmHandlerRva(ENTER) - fileOffsetToRva(writePointer + pointerToRawData + 5, virtualAddress, pointerToRawData);
+	DWORD jmpRva = fileOffsetToRva(writePointer + pointerToRawData, virtualAddress, pointerToRawData);
+	DWORD enterRva = VM::getVmHandlerRva(ENTER);
+	LONG relToEnterHandlerShort = (LONG)enterRva - (LONG)(jmpRva + 2);
+	LONG relToEnterHandlerLong = (LONG)enterRva - (LONG)(jmpRva + 5);
 
-	if (relToEnterHandler <= 127 && relToEnterHandler >= -128)
+	if (relToEnterHandlerShort <= 127 && relToEnterHandlerShort >= -128)
 	{
-		addBytes({ 0xEB, (BYTE)(relToEnterHandler & 0xFF) }); // jmp short vmenter
+		addBytes({ 0xEB, (BYTE)(relToEnterHandlerShort & 0xFF) }); // jmp short vmenter
 	}
 	else
 	{
-		addBytes({ 0xE9 }); addBytes(convertToByteVector<DWORD>(relToEnterHandler)); // jmp far vmenter
+		addBytes({ 0xE9 }); addBytes(convertToByteVector<DWORD>(relToEnterHandlerLong)); // jmp far vmenter
 	}
 }
 
@@ -66,11 +74,12 @@ void VMSection::addVmHandlers()
 		new Jne(),
 	};
 
-	int vmHandlersSize = std::size(vmHandlers);
+	int vmHandlersSize = sizeof(vmHandlers) / sizeof(vmHandlers[0]);
 
 	// create vector of indexes we will shuffle
 	// create multiple instances of a single index will result in multiple handler instances
-	std::vector<int> indexes(vmHandlersSize);
+	std::vector<int> indexes;
+	indexes.reserve(vmHandlersSize * 30);
 	for (int i = 0; i < vmHandlersSize; i++)
 	{
 		for (int j = 0; j < getRandomInt(15, 30); j++)

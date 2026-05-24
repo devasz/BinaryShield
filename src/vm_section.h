@@ -21,9 +21,9 @@ public:
 	void addBytes(std::vector<BYTE> bytes);
 private:
 	bool initialised = false;
-	DWORD pointerToRawData;
-	DWORD virtualAddress;
-	DWORD writePointer;
+	DWORD pointerToRawData = 0;
+	DWORD virtualAddress = 0;
+	DWORD writePointer = 0;
 	std::vector<BYTE> bytes;
 
 	void addVmHandlers();

@@ -19,7 +19,8 @@ int main(int argc, char* argv[])
 	if (!pe.load())
 		return 1;
 
-	pe.addFunctionByRva(std::stoi(argv[2], nullptr, 16), std::stoi(argv[3], nullptr, 16));
+	if (!pe.addFunctionByRva(std::stoi(argv[2], nullptr, 16), std::stoi(argv[3], nullptr, 16)))
+		return 1;
 
 	std::cout << "virtualizing function(s)..." << std::endl;
 

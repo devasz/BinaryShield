@@ -18,7 +18,7 @@ public:
 	bool load();
 	bool save(std::string path);
 
-	void addFunctionByRva(DWORD startRva, DWORD endRva);
+	bool addFunctionByRva(DWORD startRva, DWORD endRva);
 	bool virtualizeFunctions();
 	bool addVmSection();
 
@@ -38,6 +38,7 @@ private:
 	bool addSection(std::string name, DWORD flags, std::vector<BYTE> bytes);
 	DWORD getNewSectionVirtualAddress();
 	DWORD getNewSectionFileOffset();
+	bool tryRvaToFileOffset(DWORD rva, DWORD& offset);
 
 	std::vector<Function> functions;
 	bool virtualizeFunction(Function function);

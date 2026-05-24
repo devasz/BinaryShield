@@ -19,7 +19,7 @@ bool Function::disassemble()
 	DWORD offset = 0;
 	while (offset < bytes.size())
 	{
-		if (ZYAN_FAILED(ZydisDecoderDecodeFull(&decoder, bytes.data() + offset, bytes.size(), &instructionInfo, operandInfo)))
+		if (ZYAN_FAILED(ZydisDecoderDecodeFull(&decoder, bytes.data() + offset, bytes.size() - offset, &instructionInfo, operandInfo)))
 		{
 			std::cerr << "error decoding instruction" << std::endl;
 			return 0;
@@ -53,9 +53,16 @@ bool Function::disassemble()
 
 bool Function::compileInstructionsToVirtualInstructions()
 {
+	if (instructions.empty())
+	{
+		std::cerr << "error compiling empty function" << std::endl;
+		return 0;
+	}
+
 	// push context onto virtual stack
 	VM::popVmContext(&instructions[0]);
-	instructions[0].compileToVirtualInstructions();
+	if (!instructions[0].compileToVirtualInstructions())
+		return 0;
 
 	// compile each instruction to a set of virtual instructions
 	for (int i = 1; i < instructions.size(); i++)
@@ -68,14 +75,22 @@ bool Function::compileInstructionsToVirtualInstructions()
 	return 1;
 }
 
-void Function::resolveBranchInstructions(DWORD bytecodeRva)
+bool Function::resolveBranchInstructions(DWORD bytecodeRva)
 {
 	for (int i = 0; i < instructions.size(); i++)
 	{
 		if (instructions[i].isBranchInstruction())
 		{
+			int destInstructionIndex = instructions[i].getDestInstructionIndex();
+			if (destInstructionIndex < 0 ||
+				static_cast<size_t>(destInstructionIndex) >= instructions.size())
+			{
+				std::cerr << "error resolving branch destination" << std::endl;
+				return 0;
+			}
+
 			// get bytecode rva of the destination instruction
-			DWORD targetBytecodeRva = getBytecodeIndex(instructions[i].getDestInstructionIndex()) + bytecodeRva;
+			DWORD targetBytecodeRva = getBytecodeIndex(destInstructionIndex) + bytecodeRva;
 
 			// set branch instructions operand to rva of destination instruction's bytecode rva
 			if (instructions[i].isConditionalBranchInstruction())
@@ -90,6 +105,8 @@ void Function::resolveBranchInstructions(DWORD bytecodeRva)
 			}
 		}
 	}
+
+	return 1;
 }
 
 DWORD Function::getBytecodeIndex(int instructionIndex)

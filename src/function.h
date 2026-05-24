@@ -14,7 +14,7 @@ public:
 
 	bool disassemble();
 	bool compileInstructionsToVirtualInstructions();
-	void resolveBranchInstructions(DWORD bytecodeRva);
+	bool resolveBranchInstructions(DWORD bytecodeRva);
 	DWORD getBytecodeIndex(int instructionIndex);
 
 	std::vector<BYTE> getVirtualInstructionBytes();

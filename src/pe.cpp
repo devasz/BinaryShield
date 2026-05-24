@@ -1,5 +1,7 @@
 #include "pe.h"
 
+#include <algorithm>
+
 PE::PE(std::string path) : path(path) {};
 
 PE::~PE() { close(); }
@@ -44,14 +46,28 @@ bool PE::save(std::string path)
 	return 1;
 }
 
-void PE::addFunctionByRva(DWORD startRva, DWORD endRva)
+bool PE::addFunctionByRva(DWORD startRva, DWORD endRva)
 {
+	DWORD startOffset = 0;
+	DWORD endOffset = 0;
+	if (startRva >= endRva ||
+		!tryRvaToFileOffset(startRva, startOffset) ||
+		!tryRvaToFileOffset(endRva, endOffset) ||
+		startOffset >= endOffset ||
+		endOffset > bytes.size())
+	{
+		std::cerr << "invalid function RVA range" << std::endl;
+		return 0;
+	}
+
 	functions.push_back(Function
 	(
 		startRva,
 		endRva,
-		std::vector<BYTE>(bytes.begin() + rvaToFileOffset(startRva), bytes.begin() + rvaToFileOffset(endRva))
+		std::vector<BYTE>(bytes.begin() + startOffset, bytes.begin() + endOffset)
 	));
+
+	return 1;
 }
 
 bool PE::virtualizeFunction(Function function)
@@ -67,12 +83,19 @@ bool PE::virtualizeFunction(Function function)
 	if (!function.compileInstructionsToVirtualInstructions())
 		return 0;
 
+	if (rvaToFileOffset(function.getEndRva()) - rvaToFileOffset(function.getStartRva()) < 5)
+	{
+		std::cerr << "function range is too small for a JMP trampoline" << std::endl;
+		return 0;
+	}
+
 	removeOriginalFunctionBytes(function);
 
 	DWORD bytecodeRva = vmSection.getWritePointerRva();
 
 	// resolve branch instructions now we know bytecode rva
-	function.resolveBranchInstructions(bytecodeRva);
+	if (!function.resolveBranchInstructions(bytecodeRva))
+		return 0;
 
 	vmSection.addBytes(function.getVirtualInstructionBytes());
 
@@ -95,21 +118,32 @@ bool PE::virtualizeFunctions()
 	return 1;
 }
 
-bool PE::addVmSection() { return addSection(".binshld", 0xE0000000, vmSection.getBytes()); }
+bool PE::addVmSection() { return addSection(".vdata", 0x60000020, vmSection.getBytes()); }
 
 DWORD PE::rvaToFileOffset(DWORD rva)
+{
+	DWORD offset = 0;
+	if (tryRvaToFileOffset(rva, offset))
+		return offset;
+
+	return 0x0; // this should never happen, throw exception here
+}
+
+bool PE::tryRvaToFileOffset(DWORD rva, DWORD& offset)
 {
 	// find section rva lies within and calculate file offset
 	for (int i = 0; i < pNtHeader->FileHeader.NumberOfSections; i++)
 	{
+		DWORD sectionSize = std::max(pSectionHeader[i].Misc.VirtualSize, pSectionHeader[i].SizeOfRawData);
 		if (rva >= pSectionHeader[i].VirtualAddress &&
-			rva < pSectionHeader[i].VirtualAddress + (pSectionHeader[i].Misc.VirtualSize))
+			rva < pSectionHeader[i].VirtualAddress + sectionSize)
 		{
-			return (rva - pSectionHeader[i].VirtualAddress) + pSectionHeader[i].PointerToRawData;
+			offset = (rva - pSectionHeader[i].VirtualAddress) + pSectionHeader[i].PointerToRawData;
+			return 1;
 		}
 	}
 
-	return 0x0; // this should never happen, throw exception here
+	return 0;
 }
 
 DWORD PE::fileOffsetToRva(DWORD offset)
@@ -120,7 +154,7 @@ DWORD PE::fileOffsetToRva(DWORD offset)
 		if (offset >= pSectionHeader[i].PointerToRawData &&
 			offset < pSectionHeader[i].PointerToRawData + (pSectionHeader[i].SizeOfRawData))
 		{
-			return (offset - pSectionHeader[i].PointerToRawData) + pSectionHeader[i].PointerToRawData;
+			return (offset - pSectionHeader[i].PointerToRawData) + pSectionHeader[i].VirtualAddress;
 		}
 	}
 
@@ -147,7 +181,7 @@ bool PE::parseHeaders()
 	}
 
 	// pSectionHeader is a pointer to the start of an array of type IMAGE_SECTION_HEADER
-	pSectionHeader = (PIMAGE_SECTION_HEADER)(bytes.data() + pDosHeader->e_lfanew + sizeof(IMAGE_NT_HEADERS));
+	pSectionHeader = (PIMAGE_SECTION_HEADER)((BYTE*)&pNtHeader->OptionalHeader + pNtHeader->FileHeader.SizeOfOptionalHeader);
 
 	return 1;
 }
@@ -201,6 +235,19 @@ bool PE::emitRead()
 
 bool PE::addSection(std::string name, DWORD flags, std::vector<BYTE> bytes)
 {
+	DWORD newSectionHeaderEnd =
+		pDosHeader->e_lfanew +
+		sizeof(DWORD) +
+		sizeof(IMAGE_FILE_HEADER) +
+		pNtHeader->FileHeader.SizeOfOptionalHeader +
+		(pNtHeader->FileHeader.NumberOfSections + 1) * sizeof(IMAGE_SECTION_HEADER);
+
+	if (newSectionHeaderEnd > pNtHeader->OptionalHeader.SizeOfHeaders)
+	{
+		std::cerr << "not enough PE header space for new section" << std::endl;
+		return 0;
+	}
+
 	// get next section's file offset
 	DWORD newSectionFO = getNewSectionFileOffset();
 
@@ -211,11 +258,11 @@ bool PE::addSection(std::string name, DWORD flags, std::vector<BYTE> bytes)
 	pNewSectionHeader->SizeOfRawData = align(bytes.size(), pNtHeader->OptionalHeader.FileAlignment);
 	pNewSectionHeader->VirtualAddress = getNewSectionVirtualAddress();
 	pNewSectionHeader->PointerToRawData = newSectionFO;
-	CopyMemory(pNewSectionHeader->Name, name.c_str(), min(name.size(), IMAGE_SIZEOF_SHORT_NAME));
+	CopyMemory(pNewSectionHeader->Name, name.c_str(), std::min(name.size(), static_cast<size_t>(IMAGE_SIZEOF_SHORT_NAME)));
 
 	// increase section count in the file header, and update size of image
 	pNtHeader->FileHeader.NumberOfSections += 1;
-	pNtHeader->OptionalHeader.SizeOfImage += pNewSectionHeader->Misc.VirtualSize;
+	pNtHeader->OptionalHeader.SizeOfImage = pNewSectionHeader->VirtualAddress + pNewSectionHeader->Misc.VirtualSize;
 
 	// resize our bytes vector to fit our new section bytes in
 	this->bytes.resize(newSectionFO + pNewSectionHeader->SizeOfRawData);
@@ -245,7 +292,11 @@ DWORD PE::getNewSectionFileOffset()
 	// return the next section's file offset
 	return align
 	(
-		pSectionHeader[pNtHeader->FileHeader.NumberOfSections - 1].PointerToRawData + pSectionHeader[pNtHeader->FileHeader.NumberOfSections - 1].SizeOfRawData,
+		std::max<DWORD>
+		(
+			pSectionHeader[pNtHeader->FileHeader.NumberOfSections - 1].PointerToRawData + pSectionHeader[pNtHeader->FileHeader.NumberOfSections - 1].SizeOfRawData,
+			bytes.size()
+		),
 		pNtHeader->OptionalHeader.FileAlignment
 	);
 }

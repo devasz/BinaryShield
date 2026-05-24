@@ -26,7 +26,7 @@ public:
 	std::vector<VirtualInstruction>& getVirtualInstructions();
 private:
 	DWORD rva;
-	int destInstructionIndex; // index of instruction the current instruction will jump or call
+	int destInstructionIndex = -1; // index of instruction the current instruction will jump or call
 	ZydisDecodedInstruction instructionInfo;
 	std::vector<ZydisDecodedOperand> operandInfo;
 	std::vector<VirtualInstruction> virtualInstructions;

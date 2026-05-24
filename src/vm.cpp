@@ -1,6 +1,8 @@
 #include "instruction.h"
 #include "vm.h"
 
+#include <cmath>
+
 namespace VM
 {
 	std::vector<VMHandler> vmHandlers;
@@ -242,9 +244,9 @@ namespace VM
 				return 1;
 			case ZYDIS_OPERAND_TYPE_MEMORY:
 			{
+				emitPushRegister(instruction, operandInfo[0].reg.value, operandInfo[0].size);
 				calculateEffectiveAddress(instruction, operandInfo[1].mem);
 				emitRead(instruction, operandInfo[0].size);
-				emitPushRegister(instruction, operandInfo[0].reg.value, operandInfo[0].size);
 				emitArithmetic(instruction, operation, operandInfo[0].size);
 				emitPopRegister(instruction, ZYDIS_REGISTER_RFLAGS, 64);
 
@@ -661,7 +663,7 @@ namespace VM
 		ZydisRegister base = mem.base;
 		ZydisRegister index = mem.index;
 		BYTE scale = mem.scale;
-		bool hasDisplacement = mem.disp.has_displacement;
+		bool hasDisplacement = mem.disp.size != 0;
 		long long displacement = mem.disp.value;
 
 		bool is64Bits = (base != ZYDIS_REGISTER_NONE && ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, base) == 64) ||
